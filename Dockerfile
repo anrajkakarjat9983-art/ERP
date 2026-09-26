@@ -1,19 +1,26 @@
-FROM php:8.3-apache
+FROM php:8.3-cli
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq-dev git unzip curl \
+        libpq-dev git unzip curl postgresql-client \
     && docker-php-ext-install pdo_pgsql pdo_mysql \
-    && a2enmod rewrite headers \
     && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/*
 
 WORKDIR /var/www/html
 
-COPY . .
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-interaction
 
-RUN composer install --no-dev --optimize-autoloader --no-interaction \
-    && chown -R www-data:www-data storage bootstrap/cache
+COPY . .
+RUN composer dump-autoload --optimize --no-dev --no-interaction \
+    && mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "php artisan deploy && php artisan serve --host 0.0.0.0 --port ${PORT:-8080}"]
+ENV APP_ENV=production \
+    APP_DEBUG=false \
+    LOG_CHANNEL=stderr \
+    PHP_CLI_SERVER_WORKERS=4
+
+CMD ["sh", "-c", "php artisan migrate --force --no-interaction --ansi; if [ \"$(psql \"$DATABASE_URL\" -tAc 'select count(*) from users' 2>/dev/null)\" = \"0\" ]; then php artisan db:seed --force --no-interaction; fi; php artisan serve --host=0.0.0.0 --port=${PORT:-8080}"]
