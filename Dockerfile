@@ -23,4 +23,4 @@ ENV APP_ENV=production \
     LOG_CHANNEL=stderr \
     PHP_CLI_SERVER_WORKERS=4
 
-CMD ["sh", "-c", "php artisan migrate --force --no-interaction && php deploy/seed-if-empty.php; php artisan serve --host=0.0.0.0 --port=${PORT:-8080}"]
+CMD ["sh", "-c", "php artisan migrate --force --no-interaction && php deploy/seed-if-empty.php; php artisan serve --host=0.0.0.0 --port=${PORT:-8080} --no-reload"]
