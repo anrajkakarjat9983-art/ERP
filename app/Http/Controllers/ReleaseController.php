@@ -114,9 +114,11 @@ class ReleaseController extends Controller
             $ran = [];
             foreach (array_slice($pending, 0, $limit) as $file) {
                 try {
+                    // The --path option is resolved from the application root,
+                    // so it must include the database/ segment.
                     Artisan::call('migrate', [
                         '--force' => true,
-                        '--path' => 'migrations/' . $file,
+                        '--path' => 'database/migrations/' . $file,
                     ]);
                     $ran[] = $file;
                 } catch (Throwable $e) {
