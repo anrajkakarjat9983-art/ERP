@@ -1,0 +1,13 @@
+/vendor
+/node_modules
+/storage/framework/sessions
+/storage/framework/cache
+/storage/framework/views
+/storage/logs
+/public/_cpanel_setup.php
+/public/_cpanel_migrate.php
+.env
+.env.*
+Dockerfile
+render.yaml
+deploy
