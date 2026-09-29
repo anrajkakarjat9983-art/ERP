@@ -67,6 +67,18 @@ class ReleaseController extends Controller
             $db['error'] = $e->getMessage();
         }
 
+        $info = [];
+        try {
+            $rows = DB::select("select table_name from information_schema.tables where table_schema = 'public' order by table_name");
+            $info['table_count'] = count($rows);
+            $info['tables'] = array_map(fn ($r) => $r->table_name, $rows);
+            if (in_array('migrations', $info['tables'], true)) {
+                $info['migrations_recorded'] = DB::table('migrations')->count();
+            }
+        } catch (Throwable $e) {
+            $info['error'] = $e->getMessage();
+        }
+
         return response()->json([
             'ok' => true,
             'php' => [
@@ -77,7 +89,50 @@ class ReleaseController extends Controller
                 'pdo_pgsql' => extension_loaded('pdo_pgsql'),
             ],
             'db' => $db,
+            'schema' => $info,
         ]);
+    }
+
+    /**
+     * Drop every table in the public schema so migrations can start clean.
+     *
+     * A release that is killed part way through can leave a table behind
+     * without its migration being recorded, and re-running then fails because
+     * the table already exists. This is only safe on a database that holds no
+     * real data, so it requires an explicit confirmation token.
+     */
+    public function reset(Request $request): JsonResponse
+    {
+        if ($denied = $this->authorize($request)) {
+            return $denied;
+        }
+
+        if ($request->query('confirm') !== 'RESET') {
+            return response()->json([
+                'ok' => false,
+                'error' => 'refusing to reset without ?confirm=RESET',
+            ], 400);
+        }
+
+        try {
+            DB::statement('drop schema public cascade');
+            DB::statement('create schema public');
+            DB::statement('grant all on schema public to public');
+
+            $tables = DB::select("select table_name from information_schema.tables where table_schema = 'public'");
+
+            return response()->json([
+                'ok' => true,
+                'reset' => true,
+                'remaining_tables' => count($tables),
+            ]);
+        } catch (Throwable $e) {
+            return response()->json([
+                'ok' => false,
+                'stage' => 'reset',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
