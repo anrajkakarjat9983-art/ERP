@@ -29,7 +29,10 @@ class ReleaseController extends Controller
             return $denied;
         }
 
-        $db = ['configured' => (bool) env('DB_URL'), 'connection' => env('DB_CONNECTION')];
+        $db = [
+            'configured' => (bool) (env('DB_URL') ?: env('DATABASE_URL')),
+            'connection' => env('DB_CONNECTION'),
+        ];
 
         try {
             DB::connection()->getPdo();
@@ -48,9 +51,19 @@ class ReleaseController extends Controller
             return $denied;
         }
 
-        $log = [];
-        Artisan::call('migrate', ['--force' => true], $log);
-        $migrateOutput = trim(Artisan::output());
+        try {
+            Artisan::call('migrate', ['--force' => true]);
+            $migrateOutput = trim(Artisan::output());
+        } catch (Throwable $e) {
+            // Return the real reason instead of a generic 500 page, otherwise a
+            // failed release step is impossible to diagnose from the outside.
+            return response()->json([
+                'ok' => false,
+                'stage' => 'migrate',
+                'error' => $e->getMessage(),
+                'at' => basename($e->getFile()) . ':' . $e->getLine(),
+            ], 500);
+        }
 
         $seeded = null;
         try {
@@ -68,7 +81,6 @@ class ReleaseController extends Controller
             'ok' => true,
             'migrate' => $migrateOutput,
             'seed' => $seeded,
-            'pending' => trim(Artisan::call('migrate:status') ? Artisan::output() : ''),
         ]);
     }
 }
