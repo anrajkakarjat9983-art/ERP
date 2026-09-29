@@ -99,6 +99,31 @@ return [
             'sslmode' => env('DB_SSLMODE', 'prefer'),
         ],
 
+        /*
+         * Direct (unpooled) Postgres connection, used for schema changes.
+         *
+         * A transaction-mode pooler such as Neon's pooled endpoint cannot run
+         * DDL inside an explicit transaction: the first statement lands on one
+         * backend connection and the next is rejected with 25P02 "current
+         * transaction is aborted". Migrations always run inside a transaction,
+         * so they need a direct connection even though normal application
+         * traffic is fine on the pooled one.
+         */
+        'pgsql_unpooled' => [
+            'driver' => 'pgsql',
+            'url' => env('DATABASE_URL_UNPOOLED', env('DB_URL', env('DATABASE_URL'))),
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'port' => env('DB_PORT', '5432'),
+            'database' => env('DB_DATABASE', 'laravel'),
+            'username' => env('DB_USERNAME', 'root'),
+            'password' => env('DB_PASSWORD', ''),
+            'charset' => env('DB_CHARSET', 'utf8'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => env('DB_SSLMODE', 'prefer'),
+        ],
+
         'sqlsrv' => [
             'driver' => 'sqlsrv',
             'url' => env('DB_URL'),

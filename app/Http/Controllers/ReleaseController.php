@@ -152,9 +152,15 @@ class ReleaseController extends Controller
         $limit = max(1, min(50, (int) $request->query('limit', 8)));
         $seedWhenDone = $request->boolean('seed');
 
+        // Schema changes must not run through a transaction-mode pooler, which
+        // rejects the second statement of a transaction with 25P02. Fall back to
+        // the pooled connection only if no direct URL is configured.
+        $connection = env('DATABASE_URL_UNPOOLED') ? 'pgsql_unpooled' : 'pgsql';
+        DB::setDefaultConnection($connection);
+
         try {
-            $applied = Schema::hasTable('migrations')
-                ? array_flip(DB::table('migrations')->pluck('migration')->all())
+            $applied = Schema::connection($connection)->hasTable('migrations')
+                ? array_flip(DB::connection($connection)->table('migrations')->pluck('migration')->all())
                 : [];
 
             $pending = [];
@@ -173,6 +179,7 @@ class ReleaseController extends Controller
                     // so it must include the database/ segment.
                     Artisan::call('migrate', [
                         '--force' => true,
+                        '--database' => $connection,
                         '--path' => 'database/migrations/' . $file,
                     ]);
                     $ran[] = $file;
@@ -192,6 +199,7 @@ class ReleaseController extends Controller
             $remaining = max(0, count($pending) - count($ran));
             $result = [
                 'ok' => true,
+                'connection' => $connection,
                 'ran_this_call' => $ran,
                 'ran_count' => count($ran),
                 'remaining' => $remaining,
@@ -202,10 +210,15 @@ class ReleaseController extends Controller
 
             if ($seedWhenDone && $remaining === 0) {
                 try {
-                    if (Schema::hasTable('users') && DB::table('users')->count() > 0) {
+                    $usersTable = Schema::connection($connection)->hasTable('users');
+
+                    if ($usersTable && DB::connection($connection)->table('users')->count() > 0) {
                         $result['seed'] = 'skipped (users already present)';
                     } else {
-                        Artisan::call('db:seed', ['--force' => true]);
+                        Artisan::call('db:seed', [
+                            '--force' => true,
+                            '--database' => $connection,
+                        ]);
                         $result['seed'] = 'ran';
                     }
                 } catch (Throwable $e) {
