@@ -44,7 +44,10 @@ COPY --from=dependencies --chown=www-data:www-data /app /app
 COPY --chown=www-data:www-data Caddyfile /etc/frankenphp/Caddyfile
 
 RUN setcap CAP_NET_BIND_SERVICE=+eip /usr/local/bin/frankenphp \
+    && mkdir -p "$PHP_INI_DIR/conf.d" \
     && chown -R www-data:www-data /config/caddy /data/caddy
+
+COPY --chown=www-data:www-data docker/php-overrides.ini $PHP_INI_DIR/conf.d/99-overrides.ini
 
 ENV PORT=80 \
     APP_ENV=production \

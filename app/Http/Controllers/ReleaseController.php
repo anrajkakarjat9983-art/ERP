@@ -45,42 +45,127 @@ class ReleaseController extends Controller
         return response()->json(['ok' => true, 'db' => $db]);
     }
 
+    public function check(Request $request): JsonResponse
+    {
+        if ($denied = $this->authorize($request)) {
+            return $denied;
+        }
+
+        $db = [
+            'configured' => (bool) (env('DB_URL') ?: env('DATABASE_URL')),
+            'connection' => env('DB_CONNECTION'),
+            'host' => config('database.connections.pgsql.host'),
+            'driver' => config('database.default'),
+        ];
+
+        try {
+            DB::connection()->getPdo();
+            $db['reachable'] = true;
+            $db['server_version'] = DB::selectOne('select version() as v')->v ?? null;
+        } catch (Throwable $e) {
+            $db['reachable'] = false;
+            $db['error'] = $e->getMessage();
+        }
+
+        return response()->json([
+            'ok' => true,
+            'php' => [
+                'version' => PHP_VERSION,
+                'memory_limit' => ini_get('memory_limit'),
+                'memory_used_mb' => round(memory_get_peak_usage(true) / 1048576, 1),
+                'max_execution_time' => ini_get('max_execution_time'),
+                'pdo_pgsql' => extension_loaded('pdo_pgsql'),
+            ],
+            'db' => $db,
+        ]);
+    }
+
+    /**
+     * Migrate a limited number of pending migrations per request.
+     *
+     * A serverless request has a hard time limit, so running all ~90 migrations
+     * in one call can be killed part way through and return an empty 500. Each
+     * migration runs as its own transaction and is recorded as it succeeds, so
+     * the caller can simply repeat the call until `remaining` reaches zero.
+     */
     public function migrate(Request $request): JsonResponse
     {
         if ($denied = $this->authorize($request)) {
             return $denied;
         }
 
+        $limit = max(1, min(50, (int) $request->query('limit', 8)));
+        $seedWhenDone = $request->boolean('seed');
+
         try {
-            Artisan::call('migrate', ['--force' => true]);
-            $migrateOutput = trim(Artisan::output());
+            $applied = Schema::hasTable('migrations')
+                ? array_flip(DB::table('migrations')->pluck('migration')->all())
+                : [];
+
+            $pending = [];
+            foreach (glob(database_path('migrations/*.php')) ?: [] as $file) {
+                $name = basename($file, '.php');
+                if (! isset($applied[$name])) {
+                    $pending[] = basename($file);
+                }
+            }
+            sort($pending);
+
+            $ran = [];
+            foreach (array_slice($pending, 0, $limit) as $file) {
+                try {
+                    Artisan::call('migrate', [
+                        '--force' => true,
+                        '--path' => 'migrations/' . $file,
+                    ]);
+                    $ran[] = $file;
+                } catch (Throwable $e) {
+                    return response()->json([
+                        'ok' => false,
+                        'stage' => 'migrate',
+                        'failed_file' => $file,
+                        'error' => $e->getMessage(),
+                        'at' => basename($e->getFile()) . ':' . $e->getLine(),
+                        'ran_this_call' => $ran,
+                        'remaining' => max(0, count($pending) - count($ran)),
+                    ], 500);
+                }
+            }
+
+            $remaining = max(0, count($pending) - count($ran));
+            $result = [
+                'ok' => true,
+                'ran_this_call' => $ran,
+                'ran_count' => count($ran),
+                'remaining' => $remaining,
+                'total_pending_at_start' => count($pending),
+                'done' => $remaining === 0,
+                'memory_used_mb' => round(memory_get_peak_usage(true) / 1048576, 1),
+            ];
+
+            if ($seedWhenDone && $remaining === 0) {
+                try {
+                    if (Schema::hasTable('users') && DB::table('users')->count() > 0) {
+                        $result['seed'] = 'skipped (users already present)';
+                    } else {
+                        Artisan::call('db:seed', ['--force' => true]);
+                        $result['seed'] = 'ran';
+                    }
+                } catch (Throwable $e) {
+                    $result['ok'] = false;
+                    $result['stage'] = 'seed';
+                    $result['seed'] = 'failed: ' . $e->getMessage();
+                }
+            }
+
+            return response()->json($result);
         } catch (Throwable $e) {
-            // Return the real reason instead of a generic 500 page, otherwise a
-            // failed release step is impossible to diagnose from the outside.
             return response()->json([
                 'ok' => false,
-                'stage' => 'migrate',
+                'stage' => 'migrate-setup',
                 'error' => $e->getMessage(),
                 'at' => basename($e->getFile()) . ':' . $e->getLine(),
             ], 500);
         }
-
-        $seeded = null;
-        try {
-            if (Schema::hasTable('users') && DB::table('users')->count() > 0) {
-                $seeded = 'skipped (users already present)';
-            } else {
-                Artisan::call('db:seed', ['--force' => true]);
-                $seeded = 'ran';
-            }
-        } catch (Throwable $e) {
-            $seeded = 'failed: ' . $e->getMessage();
-        }
-
-        return response()->json([
-            'ok' => true,
-            'migrate' => $migrateOutput,
-            'seed' => $seeded,
-        ]);
     }
 }
