@@ -16,6 +16,12 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->trustProxies(at: '*');
+
+        // The release endpoint is called by tooling, not a browser, so it has
+        // no CSRF token. It is protected by RELEASE_TOKEN instead.
+        $middleware->validateCsrfTokens(except: [
+            'internal/*',
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
